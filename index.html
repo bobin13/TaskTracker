@@ -732,7 +732,21 @@
         }
       }
 
-      let tasks = readStoredTasks();
+      // Keep unfinished tasks first and completed tasks at the end, preserving order.
+      function completedLast(list) {
+        return [...list.filter((task) => !task.completed), ...list.filter((task) => task.completed)];
+      }
+
+      // Completed task -> very end of the list; un-completed task -> end of the unfinished tasks.
+      function moveToSection(task) {
+        const others = tasks.filter((entry) => entry !== task);
+        const firstCompleted = others.findIndex((entry) => entry.completed);
+        const index = task.completed || firstCompleted === -1 ? others.length : firstCompleted;
+        others.splice(index, 0, task);
+        tasks = others;
+      }
+
+      let tasks = completedLast(readStoredTasks());
 
       function saveTasks() {
         storageSet(storageKeys.tasks, JSON.stringify(tasks));
@@ -1038,6 +1052,7 @@
               if (task.resumeOnUncheck && task.remainingMs > 0) task.endsAt = Date.now() + task.remainingMs;
               delete task.resumeOnUncheck;
             }
+            moveToSection(task);
             saveTasks();
             renderTasks();
           });
