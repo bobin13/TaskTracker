@@ -3,8 +3,21 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#f5f6fa" />
+    <meta name="theme-color" id="theme-color" content="#f5f6fa" />
     <title>Taskflow — Your tasks, in focus</title>
+    <script>
+      // Apply the theme before first paint to avoid a flash of the wrong theme.
+      (() => {
+        let theme = null;
+        try {
+          theme = localStorage.getItem("taskflow-theme");
+        } catch {}
+        if (theme !== "dark" && theme !== "light") {
+          theme = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+        }
+        document.documentElement.dataset.theme = theme;
+      })();
+    </script>
     <style>
       :root {
         color-scheme: light;
@@ -16,7 +29,12 @@
         --border: #eaebf1;
         --accent: #6858df;
         --accent-soft: #efedff;
+        --accent-strong: #6858df;
+        --accent-strong-hover: #5949ce;
         --success: #36a77a;
+        --timer: #e8541e;
+        --danger: #d34e61;
+        --check-border: #c9cbd6;
         --shadow: 0 16px 48px rgb(34 35 65 / 8%);
       }
 
@@ -30,7 +48,12 @@
         --border: #363846;
         --accent: #a59aff;
         --accent-soft: #343148;
+        --accent-strong: #6f61e6;
+        --accent-strong-hover: #8174f2;
         --success: #63c99c;
+        --timer: #ff8a5c;
+        --danger: #f07a8a;
+        --check-border: #4f5263;
         --shadow: 0 16px 48px rgb(0 0 0 / 20%);
       }
 
@@ -233,7 +256,7 @@
         align-items: center;
         gap: 7px;
         color: #fff;
-        background: #6858df;
+        background: var(--accent-strong);
         border: 0;
         border-radius: 11px;
         font-size: 13px;
@@ -243,7 +266,7 @@
       }
 
       .add-button:hover {
-        background: #5949ce;
+        background: var(--accent-strong-hover);
         transform: translateY(-1px);
       }
 
@@ -299,7 +322,7 @@
         margin: 0;
         appearance: none;
         background: var(--surface);
-        border: 1.5px solid #c9cbd6;
+        border: 1.5px solid var(--check-border);
         border-radius: 6px;
         cursor: pointer;
       }
@@ -351,13 +374,41 @@
       }
 
       .timer-time {
-        color: #ff5722;
+        color: var(--timer);
         font-size: 18px;
         font-weight: 700;
       }
 
       .timer-time.expired {
-        color: #d34e61;
+        color: var(--danger);
+      }
+
+      .timer-button:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+
+      .edit-input {
+        width: 100%;
+        min-width: 0;
+        height: 36px;
+        padding: 0 10px;
+        color: var(--text);
+        background: var(--surface-muted);
+        border: 1px solid var(--accent);
+        border-radius: 8px;
+        outline: none;
+        box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
+        font-size: 16px;
+      }
+
+      .storage-warning {
+        margin: -14px 0 18px;
+        padding: 10px 14px;
+        color: var(--danger);
+        background: color-mix(in srgb, var(--danger) 10%, transparent);
+        border-radius: 10px;
+        font-size: 13px;
       }
 
       .timer-time.finished {
@@ -384,7 +435,7 @@
         text-decoration: line-through;
       }
 
-      .delete-button {
+      .icon-button {
         width: 32px;
         height: 32px;
         flex: 0 0 32px;
@@ -399,17 +450,22 @@
         transition: color 150ms ease, background-color 150ms ease, opacity 150ms ease;
       }
 
-      .task-item:hover .delete-button,
-      .delete-button:focus-visible {
+      .task-item:hover .icon-button,
+      .task-item:focus-within .icon-button {
         opacity: 1;
       }
 
-      .delete-button:hover {
-        color: #d34e61;
-        background: color-mix(in srgb, #d34e61 10%, transparent);
+      .edit-button:hover {
+        color: var(--accent);
+        background: var(--accent-soft);
       }
 
-      .delete-button svg {
+      .delete-button:hover {
+        color: var(--danger);
+        background: color-mix(in srgb, var(--danger) 10%, transparent);
+      }
+
+      .icon-button svg {
         width: 16px;
         height: 16px;
       }
@@ -506,7 +562,7 @@
           padding-left: 14px;
         }
 
-        .delete-button {
+        .icon-button {
           opacity: 1;
         }
       }
@@ -548,6 +604,9 @@
       <p class="eyebrow">Your personal workspace</p>
       <h1>Make today count.</h1>
       <p class="subtitle">A little progress adds up. What’s on your list?</p>
+      <p class="storage-warning" id="storage-warning" role="status" hidden>
+        Your browser is blocking storage, so changes won’t be kept after you close this tab.
+      </p>
 
       <section class="task-panel" aria-label="Task list">
         <form class="task-form" id="task-form">
@@ -582,12 +641,37 @@
       const clearCompletedButton = document.querySelector("#clear-completed");
       const themeToggle = document.querySelector("#theme-toggle");
       const themeIcon = document.querySelector("#theme-icon");
+      const themeColorMeta = document.querySelector("#theme-color");
+      const storageWarning = document.querySelector("#storage-warning");
       const storageKeys = { tasks: "taskflow-tasks", theme: "taskflow-theme" };
       const defaultDurationMs = 60 * 60 * 1000;
+      const defaultTitle = document.title;
+      let editingId = null;
+
+      // ---------- Storage (never throws) ----------
+
+      function storageGet(key) {
+        try {
+          return localStorage.getItem(key);
+        } catch {
+          return null;
+        }
+      }
+
+      function storageSet(key, value) {
+        try {
+          localStorage.setItem(key, value);
+          storageWarning.hidden = true;
+          return true;
+        } catch {
+          storageWarning.hidden = false;
+          return false;
+        }
+      }
 
       function readStoredTasks() {
         try {
-          const value = JSON.parse(localStorage.getItem(storageKeys.tasks) || "[]");
+          const value = JSON.parse(storageGet(storageKeys.tasks) || "[]");
           return Array.isArray(value)
             ? value
                 .filter((task) => task && typeof task.id === "string" && typeof task.text === "string" && typeof task.completed === "boolean")
@@ -614,10 +698,12 @@
       let tasks = readStoredTasks();
 
       function saveTasks() {
-        localStorage.setItem(storageKeys.tasks, JSON.stringify(tasks));
+        storageSet(storageKeys.tasks, JSON.stringify(tasks));
       }
 
       saveTasks();
+
+      // ---------- Time helpers ----------
 
       function remainingTime(task) {
         return task.endsAt === null ? task.remainingMs : Math.max(0, task.endsAt - Date.now());
@@ -632,20 +718,81 @@
         return hours > 0 ? `${hours}:${twoDigits(minutes)}:${twoDigits(seconds)}` : `${twoDigits(minutes)}:${twoDigits(seconds)}`;
       }
 
+      // ---------- Time's-up alerts (sound + notification) ----------
+
+      let audioContext = null;
+
+      function unlockAudio() {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        if (!AudioCtx) return;
+        try {
+          audioContext ??= new AudioCtx();
+          if (audioContext.state === "suspended") audioContext.resume();
+        } catch {}
+      }
+
+      function playChime() {
+        if (!audioContext) return;
+        try {
+          const start = audioContext.currentTime;
+          [880, 880, 1046.5].forEach((frequency, index) => {
+            const at = start + index * 0.25;
+            const oscillator = audioContext.createOscillator();
+            const gain = audioContext.createGain();
+            oscillator.type = "sine";
+            oscillator.frequency.value = frequency;
+            gain.gain.setValueAtTime(0.0001, at);
+            gain.gain.exponentialRampToValueAtTime(0.25, at + 0.02);
+            gain.gain.exponentialRampToValueAtTime(0.0001, at + 0.22);
+            oscillator.connect(gain).connect(audioContext.destination);
+            oscillator.start(at);
+            oscillator.stop(at + 0.24);
+          });
+        } catch {}
+      }
+
+      function requestNotificationPermission() {
+        if (!("Notification" in window) || Notification.permission !== "default") return;
+        try {
+          Notification.requestPermission().catch(() => {});
+        } catch {}
+      }
+
+      function alertTimeUp(expiredTasks) {
+        playChime();
+        if (!("Notification" in window) || Notification.permission !== "granted") return;
+        for (const task of expiredTasks) {
+          try {
+            new Notification("Time's up", { body: task.text, tag: task.id });
+          } catch {}
+        }
+      }
+
+      // Browsers need a user gesture before audio can play.
+      document.addEventListener("pointerdown", unlockAudio);
+      document.addEventListener("keydown", unlockAudio);
+
+      // ---------- Ticking ----------
+
+      function updateTitle() {
+        const active = tasks.filter((task) => !task.completed);
+        const running = active.filter((task) => task.endsAt !== null).sort((a, b) => a.endsAt - b.endsAt);
+        if (running.length > 0) {
+          const [next] = running;
+          const more = running.length > 1 ? ` (+${running.length - 1})` : "";
+          document.title = `⏱ ${formatTime(remainingTime(next))} · ${next.text}${more}`;
+          return;
+        }
+        const expired = active.find((task) => task.remainingMs === 0);
+        document.title = expired ? `⏰ Time's up · ${expired.text}` : defaultTitle;
+      }
+
       function updateTimerDisplays() {
-        let changed = false;
         for (const item of taskList.querySelectorAll(".task-item")) {
           const task = tasks.find((entry) => entry.id === item.dataset.taskId);
           if (!task) continue;
 
-          let left = remainingTime(task);
-          if (!task.completed && task.endsAt !== null && left === 0) {
-            task.remainingMs = 0;
-            task.endsAt = null;
-            left = 0;
-            changed = true;
-          }
-
+          const left = remainingTime(task);
           const time = item.querySelector(".timer-time");
           const toggle = item.querySelector(".timer-toggle");
           if (time) {
@@ -654,13 +801,49 @@
             time.classList.toggle("finished", task.completed);
           }
           if (toggle) {
-            toggle.textContent = task.endsAt === null ? "Resume" : "Pause";
+            const label = task.endsAt === null ? "Resume" : "Pause";
+            toggle.textContent = label;
             toggle.disabled = task.completed || left === 0;
-            if (left === 0) toggle.textContent = "Resume";
+            toggle.setAttribute("aria-label", `${label} timer: ${task.text}`);
           }
         }
-        if (changed) saveTasks();
       }
+
+      function tick() {
+        const now = Date.now();
+        const expired = [];
+        for (const task of tasks) {
+          if (!task.completed && task.endsAt !== null && task.endsAt <= now) {
+            task.remainingMs = 0;
+            task.endsAt = null;
+            expired.push(task);
+          }
+        }
+        if (expired.length > 0) {
+          saveTasks();
+          alertTimeUp(expired);
+        }
+        updateTimerDisplays();
+        updateTitle();
+      }
+
+      // Timers in hidden tabs can be slowed to once a minute; a worker's timer
+      // isn't, so use one to keep the tab-title countdown smooth.
+      function startTicker() {
+        try {
+          const source = "setInterval(() => postMessage(0), 1000);";
+          const worker = new Worker(URL.createObjectURL(new Blob([source], { type: "text/javascript" })));
+          worker.onmessage = tick;
+          worker.onerror = () => {
+            worker.terminate();
+            window.setInterval(tick, 1000);
+          };
+        } catch {
+          window.setInterval(tick, 1000);
+        }
+      }
+
+      // ---------- Timer actions ----------
 
       function toggleTimer(task) {
         if (task.completed) return;
@@ -671,7 +854,7 @@
           task.endsAt = Date.now() + task.remainingMs;
         }
         saveTasks();
-        updateTimerDisplays();
+        tick();
       }
 
       function resetTimer(task) {
@@ -679,8 +862,10 @@
         task.remainingMs = task.durationMs;
         task.endsAt = Date.now() + task.durationMs;
         saveTasks();
-        updateTimerDisplays();
+        tick();
       }
+
+      // ---------- Rendering ----------
 
       function createIcon(path) {
         const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -695,6 +880,65 @@
         shape.setAttribute("stroke-linejoin", "round");
         svg.append(shape);
         return svg;
+      }
+
+      function applyLabels(item, task) {
+        item.querySelector(".task-check")?.setAttribute("aria-label", `${task.completed ? "Mark as not done" : "Complete"}: ${task.text}`);
+        item.querySelector(".timer-reset")?.setAttribute("aria-label", `Reset timer: ${task.text}`);
+        item.querySelector(".edit-button")?.setAttribute("aria-label", `Edit task: ${task.text}`);
+        item.querySelector(".delete-button")?.setAttribute("aria-label", `Delete task: ${task.text}`);
+      }
+
+      function createTaskText(task) {
+        const text = document.createElement("span");
+        text.className = "task-text";
+        text.textContent = task.text;
+        text.title = "Double-click to edit";
+        text.addEventListener("dblclick", () => startEditing(task));
+        return text;
+      }
+
+      function startEditing(task) {
+        editingId = task.id;
+        renderTasks();
+      }
+
+      function createEditInput(task, item) {
+        const input = document.createElement("input");
+        input.className = "edit-input";
+        input.type = "text";
+        input.maxLength = 160;
+        input.value = task.text;
+        input.setAttribute("aria-label", `Edit task: ${task.text}`);
+
+        let finished = false;
+        const finish = (save, viaKeyboard) => {
+          if (finished) return;
+          finished = true;
+          const value = input.value.trim();
+          if (save && value && value !== task.text) {
+            task.text = value;
+            saveTasks();
+          }
+          editingId = null;
+          // Swap in place so a click elsewhere (which caused the blur) still lands.
+          input.replaceWith(createTaskText(task));
+          applyLabels(item, task);
+          updateTitle();
+          if (viaKeyboard) item.querySelector(".edit-button")?.focus();
+        };
+
+        input.addEventListener("keydown", (event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            finish(true, true);
+          } else if (event.key === "Escape") {
+            event.preventDefault();
+            finish(false, true);
+          }
+        });
+        input.addEventListener("blur", () => finish(true, false));
+        return input;
       }
 
       function renderTasks() {
@@ -717,8 +961,11 @@
           message.textContent = "Add a task above and make it happen.";
           empty.append(icon, heading, message);
           taskList.append(empty);
+          updateTitle();
           return;
         }
+
+        let editInput = null;
 
         for (const task of tasks) {
           const item = document.createElement("li");
@@ -729,29 +976,39 @@
           checkbox.className = "task-check";
           checkbox.type = "checkbox";
           checkbox.checked = task.completed;
-          checkbox.setAttribute("aria-label", `${task.completed ? "Mark as not done" : "Complete"}: ${task.text}`);
           checkbox.addEventListener("change", () => {
-            if (checkbox.checked && task.endsAt !== null) {
-              task.remainingMs = remainingTime(task);
-              task.endsAt = null;
+            if (checkbox.checked) {
+              // Remember whether the timer was running so un-checking restores it.
+              task.resumeOnUncheck = task.endsAt !== null;
+              if (task.endsAt !== null) {
+                task.remainingMs = remainingTime(task);
+                task.endsAt = null;
+              }
+              task.completed = true;
+            } else {
+              task.completed = false;
+              if (task.resumeOnUncheck && task.remainingMs > 0) task.endsAt = Date.now() + task.remainingMs;
+              delete task.resumeOnUncheck;
             }
-            task.completed = checkbox.checked;
-            if (!task.completed && task.remainingMs > 0) task.endsAt = Date.now() + task.remainingMs;
             saveTasks();
             renderTasks();
           });
 
           const content = document.createElement("div");
           content.className = "task-content";
-          const text = document.createElement("span");
-          text.className = "task-text";
-          text.textContent = task.text;
+          let textElement;
+          if (task.id === editingId) {
+            editInput = createEditInput(task, item);
+            textElement = editInput;
+          } else {
+            textElement = createTaskText(task);
+          }
 
           const timerControls = document.createElement("div");
           timerControls.className = "timer-controls";
           const timer = document.createElement("span");
           timer.className = "timer-time";
-          timer.setAttribute("aria-label", "Time remaining");
+          timerControls.append(timer);
 
           if (!task.completed) {
             const toggle = document.createElement("button");
@@ -760,18 +1017,22 @@
             toggle.addEventListener("click", () => toggleTimer(task));
 
             const reset = document.createElement("button");
-            reset.className = "timer-button";
+            reset.className = "timer-button timer-reset";
             reset.type = "button";
             reset.textContent = "Reset";
-            reset.setAttribute("aria-label", `Reset timer: ${task.text}`);
             reset.addEventListener("click", () => resetTimer(task));
             timerControls.append(toggle, reset);
           }
 
+          const edit = document.createElement("button");
+          edit.className = "icon-button edit-button";
+          edit.type = "button";
+          edit.append(createIcon("M4 20h4L19 9l-4-4L4 16v4ZM13.5 6.5l4 4"));
+          edit.addEventListener("click", () => startEditing(task));
+
           const remove = document.createElement("button");
-          remove.className = "delete-button";
+          remove.className = "icon-button delete-button";
           remove.type = "button";
-          remove.setAttribute("aria-label", `Delete task: ${task.text}`);
           remove.append(createIcon("M4 7h16M10 11v6M14 11v6M5 7l1 14h12l1-14M9 7V4h6v3"));
           remove.addEventListener("click", () => {
             tasks = tasks.filter((entry) => entry.id !== task.id);
@@ -779,13 +1040,22 @@
             renderTasks();
           });
 
-          timerControls.append(remove, timer);
-          content.append(text, timerControls);
+          timerControls.append(edit, remove);
+          content.append(textElement, timerControls);
           item.append(checkbox, content);
+          applyLabels(item, task);
           taskList.append(item);
         }
+
         updateTimerDisplays();
+        updateTitle();
+        if (editInput) {
+          editInput.focus();
+          editInput.select();
+        }
       }
+
+      // ---------- Form + bulk actions ----------
 
       taskForm.addEventListener("submit", (event) => {
         event.preventDefault();
@@ -799,6 +1069,8 @@
           durationInput.focus();
           return;
         }
+        unlockAudio();
+        requestNotificationPermission();
         const durationMs = durationMinutes * 60 * 1000;
         tasks.unshift({
           id: crypto.randomUUID(),
@@ -820,7 +1092,16 @@
         renderTasks();
       });
 
-      function setTheme(theme) {
+      // ---------- Theme ----------
+
+      const darkQuery = window.matchMedia ? window.matchMedia("(prefers-color-scheme: dark)") : null;
+
+      function savedTheme() {
+        const theme = storageGet(storageKeys.theme);
+        return theme === "dark" || theme === "light" ? theme : null;
+      }
+
+      function applyTheme(theme) {
         document.documentElement.dataset.theme = theme;
         const isDark = theme === "dark";
         themeToggle.setAttribute("aria-label", `Switch to ${isDark ? "light" : "dark"} mode`);
@@ -828,16 +1109,27 @@
         themeIcon.innerHTML = isDark
           ? '<circle cx="12" cy="12" r="4" stroke="currentColor" stroke-width="1.8"/><path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>'
           : '<path d="M20.2 15.2A8.4 8.4 0 0 1 8.8 3.8 8.5 8.5 0 1 0 20.2 15.2Z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>';
-        localStorage.setItem(storageKeys.theme, theme);
+        themeColorMeta.content = getComputedStyle(document.documentElement).getPropertyValue("--page").trim();
       }
 
-      const savedTheme = localStorage.getItem(storageKeys.theme);
-      setTheme(savedTheme === "dark" ? "dark" : "light");
-      themeToggle.addEventListener("click", () => {
-        setTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
+      applyTheme(savedTheme() ?? (darkQuery?.matches ? "dark" : "light"));
+
+      // Follow the OS setting until the user picks a theme explicitly.
+      darkQuery?.addEventListener?.("change", (event) => {
+        if (!savedTheme()) applyTheme(event.matches ? "dark" : "light");
       });
+
+      themeToggle.addEventListener("click", () => {
+        const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+        applyTheme(next);
+        storageSet(storageKeys.theme, next);
+      });
+
+      // ---------- Start ----------
+
       renderTasks();
-      window.setInterval(updateTimerDisplays, 1000);
+      startTicker();
+      document.addEventListener("visibilitychange", tick);
     </script>
   </body>
 </html>
