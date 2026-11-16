@@ -4,7 +4,7 @@ Taskflow helps you stay focused while studying by keeping tasks and a timer toge
 
 ## Features
 
-- **Tasks:** add, complete, edit (pencil button or double-click the text), delete, and clear all completed tasks at once.
+- **Tasks:** add, complete, edit (pencil button or double-click the text), delete, and clear all completed tasks at once. New tasks go to the top, and finished tasks move to the end of the list so unfinished work stays in view.
 - **Timer per task:** choose a length from 1 to 1440 minutes when you add a task. You can pause, resume, or reset it. Timers keep correct time across page reloads and in background tabs.
 - **Progress bar:** a bar along the top of each task shrinks as time runs out. It shifts from green to red as the deadline gets close and pulses red when time is up.
 - **Countdown in the browser tab:** the tab title shows the timer that will finish soonest, e.g. `⏱ 24:13 · Read chapter 3`, so you can keep an eye on it from other tabs. When a timer runs out, it shows `⏰ Time's up`.
